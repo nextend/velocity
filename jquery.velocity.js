@@ -1359,6 +1359,14 @@ The biggest cause of both codebase bloat and codepath obfuscation is support for
             case "scroll":
                 action = "scroll";
                 break;
+                
+            case "pause":
+                action = "pause";
+                break;
+
+            case "resume":
+                action = "resume";
+                break;
 
             case "reverse":
                 action = "reverse";
@@ -1487,6 +1495,16 @@ The biggest cause of both codebase bloat and codepath obfuscation is support for
                 $.data(element, NAME, {
                     /* Keep track of whether the element is currently being animated by Velocity. This is used to ensure that property values are not transferred between non-consecutive (stale) calls. */
                     isAnimating: false,
+                    
+                    /* Keep track of whether the element is currently paused or not */
+                    isPaused: false,
+                    
+                    /* Store the element last pause timestamp and the global duration of the pause */
+                    pausedTime: {
+                        start: 0,
+                        duration: 0
+                    },
+                    
                     /* A reference to the element's live computedStyle object. You can learn more about computedStyle here: https://developer.mozilla.org/en/docs/Web/API/window.getComputedStyle */
                     computedStyle: null,
                     /* Tween data is cached for each animation on the element so that data can be passed across calls -- in particular, end values are used as subsequent start values in consecutive Velocity calls. */
@@ -2244,7 +2262,7 @@ The biggest cause of both codebase bloat and codepath obfuscation is support for
                         }
 
                         /* Add the current call plus its associated metadata (the element set and the call's options) onto the page-wide call container. Anything on this call container is subjected to tick() processing. */
-                        Velocity.State.calls.push([ call, elements, opts ]);
+                        Velocity.State.calls.push([ call, elements, opts, $.data(element, NAME) ]);
 
                         /* If the animation tick isn't currently running, start it. (Velocity shuts the tick off when there are no active calls to process.) */
                         if (Velocity.State.isTicking === false) {
@@ -2259,36 +2277,67 @@ The biggest cause of both codebase bloat and codepath obfuscation is support for
                 }
             }
 
-            /* When the queue option is set to false, the call skips the element's queue and fires immediately. */
-            if (opts.queue === false) {
-                /* Since this buildQueue call doesn't respect the element's existing queue (which is where a delay option would have been appended), we manually inject the delay property here with an explicit setTimeout. */
-                if (opts.delay) {
-                    setTimeout(buildQueue, opts.delay);
-                } else {
-                    buildQueue();
+            if (action === "pause") {
+                if($.data(element, NAME).isAnimating){
+                    if(!$.data(element, NAME).isPaused){
+                        
+                        /* Pause the animations on the current element */
+                        $.data(element, NAME).isPaused = true;
+
+                        /* Store the current time to calculate the pause duration on resume */
+                        $.data(element, NAME).pausedTime.start = (new Date).getTime();
+                        
+                        /* @todo: Fire a pause event */
+                    }
                 }
-            /* Otherwise, the call undergoes element queueing as normal. */
-            /* Note: To interoperate with jQuery, Velocity uses jQuery's own $.queue() stack for queuing logic. */
-            } else {
-                $.queue(element, opts.queue, function(next) {
-                    /* This is a flag used to indicate to the upcoming completeCall() function that this queue entry was initiated by Velocity. See completeCall() for further details. */
-                    Velocity.velocityQueueEntryFlag = true;
+            }else if (action === "resume") {
+                if($.data(element, NAME).isPaused){
 
-                    buildQueue(next);
-                });
-            }
+                    /* Increment the pause duration with the current pause time */
+                    $.data(element, NAME).pausedTime.duration += (new Date).getTime() - $.data(element, NAME).pausedTime.start;
 
-            /*********************
-                Auto-Dequeuing
-            *********************/
+                    $.data(element, NAME).isPaused = false;
+                    
+                    /* @todo: Fire a resume event */
 
-            /* As per jQuery's $.queue() behavior, to fire the first non-custom-queue entry on an element, the element must be dequeued if its queue stack consists *solely* of the current call.
-               (This can be determined by checking for the "inprogress" item that jQuery prepends to active queue stack arrays.) Regardless, whenever the element's queue is further appended with
-               additional items -- including $.delay()'s or even $.animate() calls, the queue's first entry is automatically fired. This behavior contrasts that of custom queues, which never auto-fire. */
-            /* Note: When an element set is being subjected to a non-parallel Velocity call, the animation will not begin until each one of the elements in the set has reached the end of its individually pre-existing queue chain. */
-            /* Note: Unfortunately, most people don't fully grasp jQuery's powerful, yet quirky, $.queue() function. Lean more here: http://stackoverflow.com/questions/1058158/can-somebody-explain-jquery-queue-to-me */
-            if ((opts.queue === "" || opts.queue === "fx") && $.queue(element)[0] !== "inprogress") {
-                $.dequeue(element);
+                    /* Start the tick loop again if stopped. */
+                    if (Velocity.State.isTicking === false) {
+                        Velocity.State.isTicking = true;
+                        tick();
+                    }
+                }
+            }else{
+                /* When the queue option is set to false, the call skips the element's queue and fires immediately. */
+                if (opts.queue === false) {
+                    /* Since this buildQueue call doesn't respect the element's existing queue (which is where a delay option would have been appended), we manually inject the delay property here with an explicit setTimeout. */
+                    if (opts.delay) {
+                        setTimeout(buildQueue, opts.delay);
+                    } else {
+                        buildQueue();
+                    }
+                /* Otherwise, the call undergoes element queueing as normal. */
+                /* Note: To interoperate with jQuery, Velocity uses jQuery's own $.queue() stack for queuing logic. */
+                } else {
+                    $.queue(element, opts.queue, function(next) {
+                        /* This is a flag used to indicate to the upcoming completeCall() function that this queue entry was initiated by Velocity. See completeCall() for further details. */
+                        Velocity.velocityQueueEntryFlag = true;
+    
+                        buildQueue(next);
+                    });
+                }
+    
+                /*********************
+                    Auto-Dequeuing
+                *********************/
+    
+                /* As per jQuery's $.queue() behavior, to fire the first non-custom-queue entry on an element, the element must be dequeued if its queue stack consists *solely* of the current call.
+                   (This can be determined by checking for the "inprogress" item that jQuery prepends to active queue stack arrays.) Regardless, whenever the element's queue is further appended with
+                   additional items -- including $.delay()'s or even $.animate() calls, the queue's first entry is automatically fired. This behavior contrasts that of custom queues, which never auto-fire. */
+                /* Note: When an element set is being subjected to a non-parallel Velocity call, the animation will not begin until each one of the elements in the set has reached the end of its individually pre-existing queue chain. */
+                /* Note: Unfortunately, most people don't fully grasp jQuery's powerful, yet quirky, $.queue() function. Lean more here: http://stackoverflow.com/questions/1058158/can-somebody-explain-jquery-queue-to-me */
+                if ((opts.queue === "" || opts.queue === "fx") && $.queue(element)[0] !== "inprogress") {
+                    $.dequeue(element);
+                }
             }
         }
 
@@ -2379,156 +2428,164 @@ The biggest cause of both codebase bloat and codepath obfuscation is support for
                 var callContainer = Velocity.State.calls[i],
                     call = callContainer[0],
                     opts = callContainer[2],
-                    timeStart = callContainer[3];
-
-                /* If timeStart is undefined, then this is the first time that this call has been processed by tick(). We assign timeStart now so that its value is as close to the real animation start time as possible.
-                   (Conversely, had timeStart been defined when this call was added to Velocity.State.calls, the delay between that time and now would cause the first few frames of the tween to be skipped since percentComplete is
-                   calculated relative to timeStart.) */
-                /* Further, subtract 16ms (the approximate resolution of RAF) from the current time value so that the first tick iteration isn't wasted by animating at 0% tween completion,
-                   which would produce the same style value as the element's current value. */
-                if (!timeStart) {
-                    timeStart = Velocity.State.calls[i][3] = timeCurrent - 16;
-                }
-
-                /* The tween's completion percentage is relative to the tween's start time, not the tween's start value (which would result in unpredictable tween durations since JavaScript's timers are not particularly accurate).
-                   Accordingly, we ensure that percentComplete does not exceed 1. */
-                var percentComplete = Math.min((timeCurrent - timeStart) / opts.duration, 1);
-
-                /**********************
-                   Element Iteration
-                **********************/
-
-                /* For every call, iterate through each of the elements in its set. */
-                for (var j = 0, callLength = call.length; j < callLength; j++) {
-
-                    var tweensContainer = call[j],
-                        element = tweensContainer.element;
-
-                    /* Check to see if this element has been deleted midway through the animation by checking for the continued existence of its data cache. If it's gone, skip animating this element. */
-                    if (!$.data(element, NAME)) {
-                        continue;
+                    elementAnimationData = callContainer[3],
+                    timeStart = callContainer[4];
+                    
+                if(!elementAnimationData.isPaused){
+                    
+                    /* Adjust the current time with the current paused time's duration */
+                    var adjustedTimeCurrent = timeCurrent - elementAnimationData.pausedTime.duration;
+                    
+                    /* If timeStart is undefined, then this is the first time that this call has been processed by tick(). We assign timeStart now so that its value is as close to the real animation start time as possible.
+                       (Conversely, had timeStart been defined when this call was added to Velocity.State.calls, the delay between that time and now would cause the first few frames of the tween to be skipped since percentComplete is
+                       calculated relative to timeStart.) */
+                    /* Further, subtract 16ms (the approximate resolution of RAF) from the current time value so that the first tick iteration isn't wasted by animating at 0% tween completion,
+                       which would produce the same style value as the element's current value. */
+                    
+                    if (!timeStart) {
+                        timeStart = Velocity.State.calls[i][4] = adjustedTimeCurrent - 16;
                     }
-
-                    var transformPropertyExists = false;
-
-                    /*********************
-                       Display Toggling
-                    *********************/
-
-                    /* If the display option is set to non-"none", set it upfront so that the element has a chance to become visible before tweening begins. (Otherwise, display's "none" value is set in completeCall() once the animation has completed.) */
-                    if (opts.display && opts.display !== "none") {
-                        CSS.setPropertyValue(element, "display", opts.display);
-                    }
-
-                    /************************
-                       Property Iteration
-                    ************************/
-
-                    /* For every element, iterate through each property. */
-                    for (var property in tweensContainer) {
-                        /* Note: In addition to property tween data, tweensContainer contains a reference to its associated element. */
-                        if (property !== "element") {
-                            var tween = tweensContainer[property],
-                                currentValue,
-                                /* Easing can either be a bezier function or a string that references a pre-registered easing on the Velocity.Easings object. In either case, return the appropriate easing function. */
-                                easing = (typeof tween.easing === "string") ? Velocity.Easings[tween.easing] : tween.easing;
-
-                            /******************************
-                               Current Value Calculation
-                            ******************************/
-
-                            /* If this is the last tick pass (if we've reached 100% completion for this tween), ensure that currentValue is explicitly set to its target endValue so that it's not subjected to any rounding. */
-                            if (percentComplete === 1) {
-                                currentValue = tween.endValue;
-                            /* Otherwise, calculate currentValue based on the current delta from startValue. */
-                            } else {
-                                currentValue = tween.startValue + ((tween.endValue - tween.startValue) * easing(percentComplete));
-                            }
-
-                            tween.currentValue = currentValue;
-
-                            /******************
-                               Hooks: Part I
-                            ******************/
-
-                            /* For hooked properties, the newly-updated rootPropertyValueCache is cached onto the element so that it can be used for subsequent hooks in this call that are associated with the same root property.
-                               If we didn't cache the updated rootPropertyValue, each subsequent update to the root property in this tick pass would reset the previous hook's updates to rootPropertyValue prior to injection. */
-                            /* A nice performance byproduct of rootPropertyValue caching is that subsequently chained animations using the same hookRoot but a different hook can use this cached rootPropertyValue. */
-                            if (CSS.Hooks.registered[property]) {
-                                var hookRoot = CSS.Hooks.getRoot(property),
-                                    rootPropertyValueCache = $.data(element, NAME).rootPropertyValueCache[hookRoot];
-
-                                if (rootPropertyValueCache) {
-                                    tween.rootPropertyValue = rootPropertyValueCache;
-                                }
-                            }
-
-                            /*****************
-                                DOM Update
-                            *****************/
-
-                            /* setPropertyValue() returns an array of the property name and property value post any normalization that may have been performed. */
-                            /* Note: To solve an IE<=8 positioning bug, the unit type is dropped when setting a property value of 0. */
-                            var adjustedSetData = CSS.setPropertyValue(element, property, tween.currentValue + (parseFloat(currentValue) === 0 ? "" : tween.unitType), tween.rootPropertyValue, tween.scrollData); /* SET */
-
-                            /*******************
-                               Hooks: Part II
-                            *******************/
-
-                            /* Now that we have the hook's updated rootPropertyValue (which is the post-processed value provided by the adjustedSetData array), cache it onto the element. */
-                            if (CSS.Hooks.registered[property]) {
-                                /* Since adjustedSetData contains normalized data ready for DOM updating, the rootPropertyValue needs to be re-extracted from its normalized form. */
-                                if (CSS.Normalizations.registered[hookRoot]) {
-                                    $.data(element, NAME).rootPropertyValueCache[hookRoot] = CSS.Normalizations.registered[hookRoot]("extract", null, adjustedSetData[1]);
+    
+                    /* The tween's completion percentage is relative to the tween's start time, not the tween's start value (which would result in unpredictable tween durations since JavaScript's timers are not particularly accurate).
+                       Accordingly, we ensure that percentComplete does not exceed 1. */
+                    var percentComplete = Math.min((adjustedTimeCurrent - timeStart) / opts.duration, 1);
+    
+                    /**********************
+                       Element Iteration
+                    **********************/
+    
+                    /* For every call, iterate through each of the elements in its set. */
+                    for (var j = 0, callLength = call.length; j < callLength; j++) {
+    
+                        var tweensContainer = call[j],
+                            element = tweensContainer.element;
+    
+                        /* Check to see if this element has been deleted midway through the animation by checking for the continued existence of its data cache. If it's gone, skip animating this element. */
+                        if (!$.data(element, NAME)) {
+                            continue;
+                        }
+    
+                        var transformPropertyExists = false;
+    
+                        /*********************
+                           Display Toggling
+                        *********************/
+    
+                        /* If the display option is set to non-"none", set it upfront so that the element has a chance to become visible before tweening begins. (Otherwise, display's "none" value is set in completeCall() once the animation has completed.) */
+                        if (opts.display && opts.display !== "none") {
+                            CSS.setPropertyValue(element, "display", opts.display);
+                        }
+    
+                        /************************
+                           Property Iteration
+                        ************************/
+    
+                        /* For every element, iterate through each property. */
+                        for (var property in tweensContainer) {
+                            /* Note: In addition to property tween data, tweensContainer contains a reference to its associated element. */
+                            if (property !== "element") {
+                                var tween = tweensContainer[property],
+                                    currentValue,
+                                    /* Easing can either be a bezier function or a string that references a pre-registered easing on the Velocity.Easings object. In either case, return the appropriate easing function. */
+                                    easing = (typeof tween.easing === "string") ? Velocity.Easings[tween.easing] : tween.easing;
+    
+                                /******************************
+                                   Current Value Calculation
+                                ******************************/
+    
+                                /* If this is the last tick pass (if we've reached 100% completion for this tween), ensure that currentValue is explicitly set to its target endValue so that it's not subjected to any rounding. */
+                                if (percentComplete === 1) {
+                                    currentValue = tween.endValue;
+                                /* Otherwise, calculate currentValue based on the current delta from startValue. */
                                 } else {
-                                    $.data(element, NAME).rootPropertyValueCache[hookRoot] = adjustedSetData[1];
+                                    currentValue = tween.startValue + ((tween.endValue - tween.startValue) * easing(percentComplete));
+                                }
+    
+                                tween.currentValue = currentValue;
+    
+                                /******************
+                                   Hooks: Part I
+                                ******************/
+    
+                                /* For hooked properties, the newly-updated rootPropertyValueCache is cached onto the element so that it can be used for subsequent hooks in this call that are associated with the same root property.
+                                   If we didn't cache the updated rootPropertyValue, each subsequent update to the root property in this tick pass would reset the previous hook's updates to rootPropertyValue prior to injection. */
+                                /* A nice performance byproduct of rootPropertyValue caching is that subsequently chained animations using the same hookRoot but a different hook can use this cached rootPropertyValue. */
+                                if (CSS.Hooks.registered[property]) {
+                                    var hookRoot = CSS.Hooks.getRoot(property),
+                                        rootPropertyValueCache = $.data(element, NAME).rootPropertyValueCache[hookRoot];
+    
+                                    if (rootPropertyValueCache) {
+                                        tween.rootPropertyValue = rootPropertyValueCache;
+                                    }
+                                }
+    
+                                /*****************
+                                    DOM Update
+                                *****************/
+    
+                                /* setPropertyValue() returns an array of the property name and property value post any normalization that may have been performed. */
+                                /* Note: To solve an IE<=8 positioning bug, the unit type is dropped when setting a property value of 0. */
+                                var adjustedSetData = CSS.setPropertyValue(element, property, tween.currentValue + (parseFloat(currentValue) === 0 ? "" : tween.unitType), tween.rootPropertyValue, tween.scrollData); /* SET */
+    
+                                /*******************
+                                   Hooks: Part II
+                                *******************/
+    
+                                /* Now that we have the hook's updated rootPropertyValue (which is the post-processed value provided by the adjustedSetData array), cache it onto the element. */
+                                if (CSS.Hooks.registered[property]) {
+                                    /* Since adjustedSetData contains normalized data ready for DOM updating, the rootPropertyValue needs to be re-extracted from its normalized form. */
+                                    if (CSS.Normalizations.registered[hookRoot]) {
+                                        $.data(element, NAME).rootPropertyValueCache[hookRoot] = CSS.Normalizations.registered[hookRoot]("extract", null, adjustedSetData[1]);
+                                    } else {
+                                        $.data(element, NAME).rootPropertyValueCache[hookRoot] = adjustedSetData[1];
+                                    }
+                                }
+    
+                                /***************
+                                   Transforms
+                                ***************/
+    
+                                /* Flag whether a transform property is being animated so that flushTransformCache() can be triggered once this tick pass is complete. */
+                                if (adjustedSetData[0] === "transform") {
+                                    transformPropertyExists = true;
                                 }
                             }
-
-                            /***************
-                               Transforms
-                            ***************/
-
-                            /* Flag whether a transform property is being animated so that flushTransformCache() can be triggered once this tick pass is complete. */
-                            if (adjustedSetData[0] === "transform") {
+                        }
+    
+                        /****************
+                            mobileHA
+                        ****************/
+    
+                        /* If mobileHA is enabled, set the translate3d transform to null to force hardware acceleration. It's safe to override this property since Velocity doesn't actually support its animation (hooks are used in its place). */
+                        if (opts.mobileHA) {
+                            /* Don't set the null transform hack if we've already done so. */
+                            if ($.data(element, NAME).transformCache.translate3d === undefined) {
+                                /* All entries on the transformCache object are concatenated into a single transform string via flushTransformCache(). */
+                                $.data(element, NAME).transformCache.translate3d = "(0px, 0px, 0px)";
+    
                                 transformPropertyExists = true;
                             }
                         }
-                    }
-
-                    /****************
-                        mobileHA
-                    ****************/
-
-                    /* If mobileHA is enabled, set the translate3d transform to null to force hardware acceleration. It's safe to override this property since Velocity doesn't actually support its animation (hooks are used in its place). */
-                    if (opts.mobileHA) {
-                        /* Don't set the null transform hack if we've already done so. */
-                        if ($.data(element, NAME).transformCache.translate3d === undefined) {
-                            /* All entries on the transformCache object are concatenated into a single transform string via flushTransformCache(). */
-                            $.data(element, NAME).transformCache.translate3d = "(0px, 0px, 0px)";
-
-                            transformPropertyExists = true;
+    
+                        if (transformPropertyExists) {
+                            CSS.flushTransformCache(element);
                         }
                     }
-
-                    if (transformPropertyExists) {
-                        CSS.flushTransformCache(element);
+    
+                    /* The non-"none" display value is only applied to an element once -- when its associated call is first ticked through. Accordingly, it's set to false so that it isn't re-processed by this call in the next tick. */
+                    if (opts.display && opts.display !== "none") {
+                        Velocity.State.calls[i][2].display = false;
                     }
-                }
-
-                /* The non-"none" display value is only applied to an element once -- when its associated call is first ticked through. Accordingly, it's set to false so that it isn't re-processed by this call in the next tick. */
-                if (opts.display && opts.display !== "none") {
-                    Velocity.State.calls[i][2].display = false;
-                }
-
-                /* Pass the elements and the timing data into the progress callback. */
-                if (opts.progress) {
-                    opts.progress.call(callContainer[1], callContainer[1], percentComplete, Math.max(0, (timeStart + opts.duration) - timeCurrent), timeStart);
-                }
-
-                /* If this call has finished tweening, pass its index to completeCall() to handle call cleanup. */
-                if (percentComplete === 1) {
-                    completeCall(i);
+    
+                    /* Pass the elements and the timing data into the progress callback. */
+                    if (opts.progress) {
+                        opts.progress.call(callContainer[1], callContainer[1], percentComplete, Math.max(0, (timeStart + opts.duration) - adjustedTimeCurrent), timeStart);
+                    }
+    
+                    /* If this call has finished tweening, pass its index to completeCall() to handle call cleanup. */
+                    if (percentComplete === 1) {
+                        completeCall(i);
+                    }
                 }
             }
         }
@@ -2571,6 +2628,7 @@ The biggest cause of both codebase bloat and codepath obfuscation is support for
             if ($.queue(element)[1] === undefined || !/\.velocityQueueEntryFlag/i.test($.queue(element)[1])) {
                 /* The element may have been deleted. Ensure that its data cache still exists before acting on it. */
                 if ($.data(element, NAME)) {
+                    
                     $.data(element, NAME).isAnimating = false;
                     /* Clear the element's rootPropertyValueCache, which will become stale. */
                     $.data(element, NAME).rootPropertyValueCache = {};
